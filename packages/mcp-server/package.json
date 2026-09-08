@@ -1,0 +1,26 @@
+{
+  "name": "@figctx/mcp-server",
+  "version": "0.1.0",
+  "type": "module",
+  "files": ["dist"],
+  "bin": {
+    "figctx-mcp": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "pnpm --dir ../core build && tsc -p tsconfig.json && node ./scripts/bundle.mjs",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "fzstd": "0.1.1",
+    "kiwi-schema": "0.5.0",
+    "pixelmatch": "^7.2.0",
+    "pngjs": "^7.0.0",
+    "yauzl": "^3.4.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1"
+  }
+}

@@ -1,0 +1,37 @@
+name: Real Figma acceptance
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-fig:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Download pinned private fixture
+        env:
+          GH_TOKEN: ${{ secrets.FIGCTX_TEST_DATA_TOKEN }}
+          FIGCTX_TEST_DATA_REPOSITORY: ${{ vars.FIGCTX_TEST_DATA_REPOSITORY }}
+        run: |
+          test -n "$FIGCTX_TEST_DATA_REPOSITORY"
+          fixture_tag=$(node -p "require('./tests/acceptance/fixture-contract.json').releaseTag")
+          fixture_name=$(node -p "require('./tests/acceptance/fixture-contract.json').assetName")
+          gh release download "$fixture_tag" --repo "$FIGCTX_TEST_DATA_REPOSITORY" --pattern "$fixture_name" --dir "$RUNNER_TEMP/figctx-acceptance"
+          echo "FIGCTX_ACCEPTANCE_FIG=$RUNNER_TEMP/figctx-acceptance/$fixture_name" >> "$GITHUB_ENV"
+      - name: Build and verify private fixture
+        run: pnpm build && pnpm test:real-fig

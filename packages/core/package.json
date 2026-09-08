@@ -1,0 +1,32 @@
+{
+  "name": "@figctx/core",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "fzstd": "0.1.1",
+    "kiwi-schema": "0.5.0",
+    "pixelmatch": "^7.2.0",
+    "pngjs": "^7.0.0",
+    "yauzl": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/pngjs": "^6.0.5",
+    "@types/yauzl": "^3.4.0",
+    "@types/yazl": "^3.3.1",
+    "yazl": "^3.3.1"
+  }
+}
