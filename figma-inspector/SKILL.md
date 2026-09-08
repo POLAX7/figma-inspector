@@ -129,7 +129,7 @@ The skill includes executable TypeScript utilities:
 
 - **`scripts/prune-figma-node.ts`**: Recursively strips non-render properties, converts colors to `#RRGGBB`, formats Auto Layout, maps `componentProperties` & `layoutGrow`, extracts icon hints, and reports compression stats.
 - **`scripts/inspection-decision.ts`**: Validates inspection nodes and Figma nodes responses, evaluates whether a node with missing children should trigger fallback, detects `lk-` local hashes, resolves recommended MCP tools via `resolveRecommendedTool()`, and exposes `resolveFallbackStage()` for the local-search to cloud-hydrate transition.
-- **Local resolver (`figma-free-mcp/packages/core`)**: Preserves `symbolData` references and expands local instances into `resolvedChildIds`; use this before any cloud fallback.
+- **Local resolver (`POLAX7/figma-free-mcp/packages/core`)**: Preserves `symbolData` references and expands local instances into `resolvedChildIds`; use this before any cloud fallback. The maintained fork is available at https://github.com/POLAX7/figma-free-mcp.
 - **`scripts/cache-manager.ts`**: Local disk persistence manager with exact `.figctx` bundle identity, source/schema validation, atomic writes, and `getOrSet()` in-process concurrent miss deduplication.
 - **`scripts/figma-fetcher.ts`**: Resilient HTTP client with bounded total attempts, abortable backoff, 60s circuit-breaker on long cooldowns, rate-limit metadata, and 4xx fast-fail.
 - **`scripts/test-runner.ts`**: Verifies the Alert-shaped synthetic fixture, full-depth retention, supported styling properties, unsupported-property markers, compression ratios, props/flex extraction, cache auto-invalidation, and tool selection matrix.
