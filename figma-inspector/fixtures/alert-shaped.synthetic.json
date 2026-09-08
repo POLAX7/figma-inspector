@@ -1,0 +1,55 @@
+{
+  "id": "synthetic:alert",
+  "name": "Alert",
+  "type": "INSTANCE",
+  "visible": true,
+  "componentProperties": {
+    "Type": { "type": "VARIANT", "value": "Warning" },
+    "ShowIcon": { "type": "BOOLEAN", "value": true }
+  },
+  "layoutMode": "VERTICAL",
+  "itemSpacing": 24,
+  "paddingLeft": 24,
+  "paddingRight": 24,
+  "paddingTop": 36,
+  "paddingBottom": 36,
+  "fills": [{ "type": "SOLID", "color": { "r": 1, "g": 1, "b": 1 } }],
+  "children": [
+    {
+      "id": "synthetic:header",
+      "name": "Header Container",
+      "type": "FRAME",
+      "layoutMode": "HORIZONTAL",
+      "itemSpacing": 12,
+      "children": [
+        {
+          "id": "synthetic:icon",
+          "name": "Warning Icon",
+          "type": "VECTOR",
+          "absoluteBoundingBox": { "width": 24, "height": 24 }
+        },
+        {
+          "id": "synthetic:title",
+          "name": "Alert Title",
+          "type": "TEXT",
+          "characters": "提醒通知",
+          "style": {
+            "fontFamily": "PingFang TC",
+            "fontWeight": 600,
+            "fontSize": 18,
+            "lineHeightPx": 26
+          },
+          "fills": [{ "type": "SOLID", "color": { "r": 0.1, "g": 0.1, "b": 0.1 } }]
+        }
+      ]
+    },
+    {
+      "id": "synthetic:body",
+      "name": "Alert Body",
+      "type": "TEXT",
+      "characters": "您的變更將會影響所有套用此範本的信件，請確認是否繼續執行？",
+      "style": { "fontFamily": "PingFang TC", "fontWeight": 400, "fontSize": 14, "lineHeightPx": 20 },
+      "fills": [{ "type": "SOLID", "color": { "r": 0.4, "g": 0.4, "b": 0.4 } }]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "sourceType": "synthetic",
+  "sourceSha256": null,
+  "schemaVersion": "1.0.0",
+  "nodeId": "synthetic:alert",
+  "nodeIdRedacted": false,
+  "acquiredAt": "2026-09-04",
+  "authorized": true,
+  "redacted": true,
+  "testCommand": "node --experimental-strip-types .agents/skills/figma-inspector/scripts/test-runner.ts",
+  "notes": "Hand-authored fixture; not a Figma API response and not evidence of production hydration."
+}

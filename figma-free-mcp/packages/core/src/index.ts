@@ -1,0 +1,17 @@
+export { detectAssetFormat, extensionForAsset, type AssetFormat } from './assets.js';
+export { FigctxError, errorCodes, type ErrorCode } from './errors.js';
+export { readFigArchive } from './archive/read-archive.js';
+export { defaultArchiveLimits, type ArchiveLimits, type FigArchive, type FigImage } from './archive/types.js';
+export { decodeKiwiCanvas } from './decoder/kiwi.js';
+export { type DecodedFig } from './decoder/types.js';
+export { expandLocalInstances, normalizeDocument, resolveNodeReference, canonicalNodeId, hashToHex, type AgentDocument, type AgentNode, type AssetReference, type VectorReference } from './normalize/document.js';
+export { extractTokens, extractVariables, type ExtractedTokens, type ExtractedVariables, type StyleToken, type FontRequirement, type VariableCollection, type VariableDefinition, type VariableMode, type VariableValue } from './tokens/extract.js';
+export { writeBundle, type BundleInput, type BundleVector, type BundleSvgVector } from './bundle/write-bundle.js';
+export { vectorNetworkToSvg, type VectorSize } from './vectors/svg.js';
+export { composeFrameSvg, composeVectorGroupSvg, composeBundleVectorGroupSvg, findVectorGroups, type VectorGroup } from './vectors/frame.js';
+export { extractFig, type ExtractionResult } from './extract.js';
+export { buildNodeContext, type NodeContext } from './context/node-context.js';
+export { inspectNode, type InspectNodeOptions, type InspectNodeLimits, type InspectedNode, type NodeInspection } from './context/inspect-node.js';
+export { comparePng, describePng, type PixelComparison, type PngDescription } from './visual/compare.js';
+export { auditFontRequirements, type AvailableFont, type FontAudit } from './visual/fonts.js';
+export { doctorBundle, searchNodes, type BundleDoctorReport, type DoctorCheck, type NodeSearchOptions, type NodeSearchResult } from './discovery.js';
