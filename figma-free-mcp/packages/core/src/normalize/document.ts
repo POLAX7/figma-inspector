@@ -2,6 +2,10 @@ import { FigctxError } from '../errors.js';
 
 export interface AgentNode {
   id: string;
+  /** Original Figma node ID; remains stable for materialized descendants. */
+  node_id?: string;
+  /** Original component ID referenced by an INSTANCE, when available. */
+  main_component_id?: string;
   name: string;
   type: string;
   parentId?: string;
@@ -63,25 +67,35 @@ export function normalizeDocument(changes: readonly Record<string, unknown>[], o
   return { contractVersion: '1', ...(options.originFileKey ? { originFileKey: options.originFileKey } : {}), rootIds: roots, nodesById };
 }
 
+/** Returns the child IDs consumers should traverse after local expansion. */
+export function effectiveChildIds(node: AgentNode): string[] {
+  return node.resolvedChildIds ?? node.childIds;
+}
+
 /** Expands local component instances while preserving the raw instance hierarchy. */
 export function expandLocalInstances(document: AgentDocument): AgentDocument {
   const nodesById = { ...document.nodesById };
-  const pending = Object.values(document.nodesById);
+  const pending: Array<{ node: AgentNode; componentPath: Set<string> }> = Object.values(document.nodesById).map((node) => ({ node, componentPath: new Set<string>() }));
   for (let index = 0; index < pending.length; index += 1) {
-    const instance = pending[index]!;
+    const { node: instance, componentPath } = pending[index]!;
     if (instance.type !== 'INSTANCE' || instance.childIds.length || instance.resolvedChildIds || !instance.resolvedComponentId) continue;
     const component = document.nodesById[instance.resolvedComponentId];
     if (!component) continue;
+    if (componentPath.has(instance.resolvedComponentId)) continue;
+    const nextPath = new Set(componentPath).add(instance.resolvedComponentId);
     const textOverrides = instance.instanceTextOverrides ?? [];
     const sourceTexts = descendantIds(document, component.childIds).map((id) => document.nodesById[id]).filter((node): node is AgentNode => Boolean(node?.text !== undefined));
     const textBySourceId = new Map(sourceTexts.map((node, index) => [node.id, textOverrides[index]]));
     const clone = (sourceId: string, parentId: string): string => {
       const source = document.nodesById[sourceId]!;
       const id = `${instance.id}::${source.id}`;
+      // Clone the component definition's raw tree. A source node may already
+      // carry resolved children from another instance and must not leak that
+      // expansion into this instance.
       const childIds = source.childIds.map((childId) => clone(childId, id));
       const text = textBySourceId.get(source.id);
       nodesById[id] = { ...source, id, parentId, childIds, ...(text === undefined ? {} : { text }) };
-      if (nodesById[id]!.type === 'INSTANCE') pending.push(nodesById[id]!);
+      if (nodesById[id]!.type === 'INSTANCE' && nodesById[id]!.resolvedComponentId && !nextPath.has(nodesById[id]!.resolvedComponentId!)) pending.push({ node: nodesById[id]!, componentPath: nextPath });
       return id;
     };
     instance.resolvedChildIds = component.childIds.map((childId) => clone(childId, instance.id));
@@ -157,8 +171,8 @@ function normalizeNode(change: Record<string, unknown>, zIndex: number, assetPat
     return typeof textData?.characters === 'string' ? [textData.characters] : [];
   }) : [];
   return {
-    id, name: typeof change.name === 'string' ? change.name : id, type: typeof change.type === 'string' ? change.type : 'UNKNOWN', childIds: [], zIndex,
-    ...(symbolId ? { resolvedComponentId: idFromGuid(symbolId, zIndex), instanceTextOverrides } : {}),
+    id, node_id: id, name: typeof change.name === 'string' ? change.name : id, type: typeof change.type === 'string' ? change.type : 'UNKNOWN', childIds: [], zIndex,
+    ...(symbolId ? { resolvedComponentId: idFromGuid(symbolId, zIndex), main_component_id: guidId(symbolId), instanceTextOverrides } : {}),
     ...(typeof textData?.characters === 'string' ? { text: textData.characters } : {}), ...(segments ? { textSegments: segments } : {}), ...(textLayout && Object.keys(textLayout).length ? { textLayout } : {}),
     ...(change.size === undefined ? {} : { bounds: change.size }), ...(change.transform === undefined ? {} : { transform: change.transform }),
     ...(typeof change.visible === 'boolean' ? { visible: change.visible } : {}), ...(typeof change.opacity === 'number' ? { opacity: change.opacity } : {}), ...(change.blendMode === undefined ? {} : { blendMode: change.blendMode }), ...(typeof change.mask === 'boolean' ? { mask: change.mask } : {}), ...(typeof change.frameMaskDisabled === 'boolean' ? { frameMaskDisabled: change.frameMaskDisabled } : {}), constraints: { horizontal: change.horizontalConstraint, vertical: change.verticalConstraint },

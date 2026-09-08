@@ -1,4 +1,4 @@
-import type { AgentDocument, AgentNode } from '../normalize/document.js';
+import { effectiveChildIds, type AgentDocument, type AgentNode } from '../normalize/document.js';
 
 export interface InspectNodeOptions { depth?: number; maxChildren?: number; }
 export interface InspectNodeLimits { depth: number; maxChildren: number; }
@@ -12,7 +12,7 @@ export interface InspectedNode {
   typography?: Record<string, unknown>;
   visible?: boolean;
   opacity?: number;
-  component: { type: string } | null;
+  component: { type: string; mainComponentId?: string; expanded: boolean } | null;
   assets: { imageFillCount: number; hasVector: boolean };
   childCount: number;
   children: InspectedNode[];
@@ -56,7 +56,7 @@ function limit(value: number | undefined, fallback: number, maximum: number): nu
 
 function inspect(document: AgentDocument, node: AgentNode, depth: number, childLimit: number, depthLimit: number, state: { remainingNodes: number; omitted: string[] }): InspectedNode {
   state.remainingNodes -= 1;
-  const sourceChildIds = node.resolvedChildIds ?? node.childIds;
+  const sourceChildIds = effectiveChildIds(node);
   const childIds = sourceChildIds.slice(0, childLimit);
   if (sourceChildIds.length > childIds.length) state.omitted.push(`node ${node.id}: ${sourceChildIds.length - childIds.length} children omitted by maxChildren limit (${childLimit})`);
   if (depth === 0 && childIds.length) state.omitted.push(`node ${node.id}: ${childIds.length} children omitted by depth limit (${depthLimit})`);
@@ -79,7 +79,7 @@ function inspect(document: AgentDocument, node: AgentNode, depth: number, childL
     ...(node.typography === undefined ? {} : { typography: node.typography }),
     ...(node.visible === undefined ? {} : { visible: node.visible }),
     ...(node.opacity === undefined ? {} : { opacity: node.opacity }),
-    component: isComponent(node) ? { type: node.type } : null,
+    component: isComponent(node) ? { type: node.type, ...(node.main_component_id ? { mainComponentId: node.main_component_id } : {}), expanded: Boolean(node.resolvedChildIds) } : null,
     assets: { imageFillCount: node.assetRefs.length, hasVector: Boolean(node.vectorRef) },
     childCount: sourceChildIds.length,
     children

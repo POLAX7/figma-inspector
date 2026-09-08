@@ -1,4 +1,4 @@
-import type { AgentDocument, AgentNode, AssetReference, VectorReference } from '../normalize/document.js';
+import { effectiveChildIds, type AgentDocument, type AgentNode, type AssetReference, type VectorReference } from '../normalize/document.js';
 import { findVectorGroups, type VectorGroup } from '../vectors/frame.js';
 
 export interface NodeContext {
@@ -19,7 +19,7 @@ export function buildNodeContext(document: AgentDocument, node: AgentNode): Node
   while (parent) { ancestors.unshift({ id: parent.id, name: parent.name, type: parent.type }); parent = parent.parentId ? document.nodesById[parent.parentId] : undefined; }
 
   const nodes: AgentNode[] = [];
-  const visit = (current: AgentNode) => { nodes.push(current); for (const childId of current.resolvedChildIds ?? current.childIds) { const child = document.nodesById[childId]; if (child) visit(child); } };
+  const visit = (current: AgentNode) => { nodes.push(current); for (const childId of effectiveChildIds(current)) { const child = document.nodesById[childId]; if (child) visit(child); } };
   visit(node);
   const assets = unique(nodes.flatMap((item) => item.assetRefs), (item) => item.path);
   const vectors = unique(nodes.flatMap((item) => item.vectorRef ? [item.vectorRef] : []), (item) => item.path);
@@ -29,5 +29,5 @@ export function buildNodeContext(document: AgentDocument, node: AgentNode): Node
 function unique<T>(items: readonly T[], key: (item: T) => string): T[] { const seen = new Set<string>(); return items.filter((item) => { const value = key(item); if (seen.has(value)) return false; seen.add(value); return true; }); }
 function hasSvgFragments(document: AgentDocument, nodeId: string): boolean {
   const node = document.nodesById[nodeId];
-  return Boolean(node) && (!node.vectorRef || Boolean(node.vectorRef.svgPath)) && node.childIds.every((childId) => hasSvgFragments(document, childId));
+  return Boolean(node) && (!node.vectorRef || Boolean(node.vectorRef.svgPath)) && effectiveChildIds(node).every((childId) => hasSvgFragments(document, childId));
 }
