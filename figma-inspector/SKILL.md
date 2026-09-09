@@ -89,6 +89,16 @@ To preserve measured visual properties without token bloat:
 
 The current pruner supports three explicit modes: `semantic` emits semantic node data and hierarchy, `render-critical` emits the supported layout/style subset plus `unsupportedProperties`, and `lossless-ast` additionally keeps selected original render metadata. None of these modes alone proves pixel equality. Gradient/image fills, fill/stroke geometry, multiple strokes, vector paths, mixed text styles, non-default blend modes, rotation, clipping/masks, and non-drop-shadow effects are not yet converted to compact CSS. Compression is fixture-dependent: small leaf nodes can grow after normalization, so report min/median/max measurements rather than promising a universal savings percentage.
 
+### 3.1 Vector asset evidence gate
+
+For any icon or SVG requested from a Figma URL:
+
+1. Parse the URL's `fileKey` and `node-id` first. Route directly to the matching local `.figctx` bundle when its manifest, source filename, and source SHA are available; do not begin a repository-wide name search.
+2. Confirm the exact node, its component/variant chain, vector blob reference, and intended use in the target frame. A same-named asset is only a candidate.
+3. Inspect `fills`, `strokes`, `strokeWeight`, `strokeCap`, and `strokeJoin`. Preserve outline semantics as stroke geometry and filled semantics as fill geometry.
+4. Treat generated SVG as an extracted representation that requires checks for connected region loops, segment orientation, and XML validity. Passing an SVG byte comparison alone does not prove that it is the correct product icon.
+5. Record parser version and source freshness. If the local bundle is stale or the requested node is absent, report that evidence gap before using a cloud fallback.
+
 ### 4. API Resilience & Circuit-Breaker Rules
 When falling back to the official Figma REST API, calls must go through a resilient HTTP client (`scripts/figma-fetcher.ts`):
 1. **Max Retry Cap (Fail-Fast)**: `maxAttempts` counts the initial request. The compatibility option `maxRetries` means `1 + maxRetries` total requests. Never loop indefinitely.
@@ -203,3 +213,5 @@ if (evaluation.shouldFallback) {
 - **Red Flag: Retrying 4xx client errors.** 400, 401, 403, and 404 are permanent client errors. Retrying them wastes time and masks setup errors.
 - **Red Flag: Blindly calling `get_frame_bundle`.** `get_frame_bundle` dumps all assets, vectors, and PNG references (15k-50k tokens). Always prefer `list_frame_summaries`, `search_nodes`, or `inspect_node(depth: 2)`.
 - **Red Flag: Calling `get_figma_data` without `nodeId`.** Fetching the entire Figma cloud file returns tens of MBs (100k+ tokens) and triggers HTTP 504. Always specify the target `nodeId`.
+- **Red Flag: Searching by icon name before routing by URL identity.** Resolve `fileKey` + `node-id` and the local bundle manifest first; names and nearby instances can point to a different variant.
+- **Red Flag: Trusting a generated vector SVG without style and geometry checks.** Confirm fill/stroke semantics and that every region loop forms a connected path before using it in an asset catalog.
