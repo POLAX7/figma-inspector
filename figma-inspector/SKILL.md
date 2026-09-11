@@ -136,6 +136,15 @@ When inspecting an `INSTANCE` node:
 3. **Fail Loud on Unresolved Swaps**: If the local tool or bundle cannot resolve the swapped component (e.g. cross-file Team Library reference), do NOT invent, mock-stitch, or guess icon paths or SF Symbols. Report the missing reference explicitly.
 4. **Semantic Alignment Sanity Check**: Cross-check button labels against associated icon semantics (e.g., a "排序" button must not silently adopt a "History/Clock" icon without raising a semantic warning).
 
+### 2.1.1 Final Instance Visibility Gate (實例最終可見性檢查)
+Before implementing or reporting any UI from an `INSTANCE`, use this order:
+1. Inspect the exact screen instance, not only its `mainComponentId` or base `SYMBOL`.
+2. Resolve `resolvedChildIds` and retain raw `childIds` only as export diagnostics; raw `childIds: []` is not proof of visibility or absence.
+3. Walk the resolved instance subtree and record each ancestor/child `visible` value. A layer is renderable only when it and every visible ancestor are enabled.
+4. Apply `componentPropAssignments`, `symbolOverrides`, text overrides, visibility properties, and component swaps before describing the final UI.
+5. If the instance and base component disagree, report the instance result and identify the overridden base layer that was excluded.
+6. For visual claims, require a rendered reference or screenshot check after structural inspection; unresolved visibility or swap state must be reported as an evidence gap, not silently implemented.
+
 ### 2.2 Cross-Bundle Team Library Resolution (Peer-Bundle Discovery)
 When an instance references an external Team Library component:
 1. **Trace Library Pointers**: Raw nodes identify external symbols via:
@@ -189,6 +198,8 @@ For any icon or SVG requested from a Figma URL:
 3. Inspect `fills`, `strokes`, `strokeWeight`, `strokeCap`, and `strokeJoin`. Preserve outline semantics as stroke geometry and filled semantics as fill geometry.
 4. Treat generated SVG as an extracted representation that requires checks for connected region loops, segment orientation, and XML validity. Passing an SVG byte comparison alone does not prove that it is the correct product icon.
 5. Record parser version and source freshness. If the local bundle is stale or the requested node is absent, report that evidence gap before using a cloud fallback.
+
+6. When exporting an icon, use the component or instance frame as the default reference so its original canvas size and internal whitespace are preserved. Use a leaf VECTOR reference only when tight cropping is explicitly requested. Preserve the vector's transform and stroke cap/join in the resulting SVG.
 
 ### 3.2 Direct CLI Output Fallback (CLI 輸出備援原則)
 When the user explicitly asks to **export an SVG or image file to a destination** (e.g. `Downloads/` or project assets):
