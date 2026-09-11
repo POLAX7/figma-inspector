@@ -295,3 +295,56 @@ The workflow has been consolidated into a reusable Agent skill:
    * **Use shallow inspection for macro location**: start with `figma-free` to understand the overall canvas.
    * **Prioritize local expansion for micro implementation**: when an instance is empty, resolve `symbolData` and the same-file component definition first; only if the local resolver cannot resolve it should the cache be checked and a targeted API call considered.
    * **Prune before entering the prompt**: always call `pruneFigmaNode` and write to cache, retaining supported fidelity fields. Visual parity still requires separate manual/visual QA.
+
+---
+
+## 8. Best Practices for User Prompts (Optimal Input Parameters)
+
+To enable `figma-inspector` to locate UI components or image assets with maximum speed, minimal guessing, and high accuracy, provide the following parameters in your prompt:
+
+### 1. The Core "Golden Trio" (Fastest & Most Accurate)
+
+| Parameter | Example Format | Why It Matters |
+| :--- | :--- | :--- |
+| **1. Figma Web URL** (with `node-id`) | `https://www.figma.com/design/:fileKey/...?...node-id=1437-42481` | Skips fuzzy text searches across the entire document and drills straight down to the exact node (`1437:42481`). Also provides the real `fileKey` for official cloud API fallback if needed. |
+| **2. Local primary bundle path** | `/Users/DavidTai/Documents/GitHub/.figctx/mail-template-expanded-v6` | Enables offline-first extraction via `figma-free` (0 API calls, 0 wait time, 0 risk of HTTP 429 rate limits). |
+| **3. External Design System path** | `/Users/DavidTai/Documents/GitHub/.figctx/design-system-full` | When the target component is an external Team Library "shell component", the agent uses `componentKey` to retrieve the original vectors/images cross-bundle without timing out or matching wrong local images. |
+
+### 2. Supplementary Clarifications (Preventing Pitfalls)
+
+* **Specify target asset type and level**:
+  * **Vector Icon (SVG)**: Describe the position or semantic context (e.g. "the clear 'x' icon inside the search bar").
+  * **Raster Image (PNG/JPG)**: Describe container role or purpose (e.g. "user avatar placeholder").
+  * **Layout implementation**: Specify target framework (e.g. SwiftUI or React).
+* **Specify variant state and overrides**:
+  * If the component has interaction states (e.g. `State=Disabled`, `Size=24px`) or text overrides, explicitly instruct the agent to follow the active instance state rather than falling back to base template defaults.
+
+### 3. Recommended Prompt Template
+
+```text
+Please use figma-inspector to extract this UI component:
+
+1. Figma node URL: https://www.figma.com/design/D1YdPEP1ny5AiqROSWGpSj/即時通信件合併?node-id=1437-42481
+2. Local primary bundle: /Users/DavidTai/Documents/GitHub/.figctx/mail-template-expanded-v6
+3. External Design System: /Users/DavidTai/Documents/GitHub/.figctx/design-system-full
+4. Task objective: Extract the SVG vector data for the funnel filter icon located next to the top search bar, and verify its dimensions and color.
+```
+
+---
+
+## 9. Safety Rules: Rate-Limit Protection & Fail-Loud Alerting
+
+When executing `figma-inspector`, AI Agents must strictly adhere to the following two hard rules:
+
+### 1. Fail Loud: Explicitly Alert the User on Any Failure
+* **Zero Silent Degradation**: If any step in the process encounters an issue (e.g. node not found locally, shell component missing matching peer bundle, empty SVG vector extraction, unresolvable component swaps), the Agent **must never silently skip, guess SF Symbols, invent ad-hoc SVG paths, or substitute incorrect local images**.
+* **High-Visibility Alerting**: Output a clear warning block (`> [!WARNING]`) detailing the exact node ID, component name, failure root cause, and remediation steps (e.g. prompting user to export missing Team Library `.fig`).
+
+### 2. Mandatory User Confirmation Before Calling Official Figma API (Free Tier Protection)
+* **Strict Free Tier API Limits**: The official Figma REST API and Figma MCP (`get_figma_data`, `download_figma_images`) have very low rate-limit quotas on free plans and trigger HTTP 429 easily.
+* **Mandatory Confirmation Gate**: The Agent **must pause and request explicit user confirmation** before making any call to the official Figma API.
+* **Confirmation Request Must Include**:
+  1. Why offline resolution and peer bundle searches were insufficient.
+  2. The exact `nodeId` and cloud `fileKey` to be fetched.
+  3. A reminder that the operation consumes cloud API quota.
+  4. Execution proceeds only after the user grants explicit permission.

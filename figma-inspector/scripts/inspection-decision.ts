@@ -13,17 +13,30 @@ export interface RecommendedToolCall {
   expectedTokenCost: 'LOW (<300)' | 'MEDIUM (300-1500)' | 'HIGH (1500+)';
   rationale: string;
   forbiddenAlternatives: string[];
+  requiresUserConfirmation?: boolean;
 }
-
 export interface EvaluationResult {
   nodeId: string;
   nodeName: string;
   nodeType: string;
   isLocalFileKey?: boolean;
+  isShellComponent?: boolean;
+  sourceLibraryKey?: string;
+  componentKey?: string;
   shouldFallback: boolean;
   confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'NONE';
   reasons: string[];
-  recommendation: 'DO_NOT_CALL_API' | 'LOCAL_SEARCH_FIRST' | 'FETCH_OFFICIAL_API' | 'PROMPT_CLOUD_URL';
+  recommendation: 'DO_NOT_CALL_API' | 'LOCAL_SEARCH_FIRST' | 'FETCH_OFFICIAL_API' | 'PROMPT_CLOUD_URL' | 'RESOLVE_PEER_BUNDLE';
+  suggestedAction: string;
+  recommendedTool?: RecommendedToolCall;
+}
+
+export interface ShellComponentEvaluation {
+  isShell: boolean;
+  sourceLibraryKey?: string;
+  componentKey?: string;
+  reasons: string[];
+  recommendation: 'RESOLVE_PEER_BUNDLE' | 'NOT_A_SHELL';
   suggestedAction: string;
   recommendedTool?: RecommendedToolCall;
 }
@@ -66,12 +79,14 @@ export type InspectionIntent =
   | 'GET_DESIGN_TOKENS'
   | 'EXTRACT_ICON_SVG'
   | 'HYDRATE_INSTANCE'
-  | 'DOWNLOAD_IMAGE';
+  | 'DOWNLOAD_IMAGE'
+  | 'RESOLVE_PEER_BUNDLE';
 
 export function resolveFallbackStage(
   evaluation: EvaluationResult,
   localSymbolFound?: boolean
 ): FallbackStage {
+  if (evaluation.recommendation === 'RESOLVE_PEER_BUNDLE') return 'LOCAL_SEARCH';
   if (!evaluation.shouldFallback) return 'LOCAL_INSPECT';
   if (evaluation.isLocalFileKey) return 'USER_INPUT_REQUIRED';
   if (localSymbolFound === true) return 'LOCAL_INSPECT';
@@ -85,6 +100,97 @@ export interface ToolSelectionContext {
   query?: string;
   depth?: number;
   maxChildren?: number;
+  sourceLibraryKey?: string;
+  componentKey?: string;
+}
+
+export function hasVisualAssets(node: any): boolean {
+  if (!node || typeof node !== 'object') return false;
+  if (node.vectorRef) return true;
+  if (node.assets && (node.assets.hasVector || (typeof node.assets.imageFillCount === 'number' && node.assets.imageFillCount > 0))) {
+    return true;
+  }
+  if (Array.isArray(node.assetRefs) && node.assetRefs.length > 0) return true;
+  if (Array.isArray(node.fills) && node.fills.some((f: any) => f?.type === 'IMAGE' || f?.image)) return true;
+  if (Array.isArray(node.children) && node.children.length > 0) {
+    return node.children.some(hasVisualAssets);
+  }
+  return false;
+}
+
+export function isShellComponent(node: any): boolean {
+  if (!node || typeof node !== 'object') return false;
+  const nodeType = (node.type || '').toUpperCase();
+  if (nodeType !== 'INSTANCE' && nodeType !== 'SYMBOL') return false;
+
+  const comp = node.component || {};
+  const hasExternalMetadata = Boolean(
+    comp.sourceLibraryKey || comp.componentKey || node.sourceLibraryKey || node.componentKey
+  );
+
+  const childCount = (node.children?.length) || (node.resolvedChildIds?.length) || (node.childIds?.length) || (typeof node.childCount === 'number' ? node.childCount : 0);
+
+  // An external library component with no visual assets in its tree is a shell
+  if (hasExternalMetadata && !hasVisualAssets(node)) {
+    return true;
+  }
+
+  // Also, an instance/symbol that has child structure (childCount > 0) but zero visual assets,
+  // and whose name suggests an icon, illustration, badge, or image component
+  const nodeName = (node.name || '').toLowerCase();
+  const isVisualSemanticName = /icon|avatar|illu|graphic|logo|img|image|asset|thumb/i.test(nodeName);
+  if (isVisualSemanticName && childCount > 0 && !hasVisualAssets(node)) {
+    return true;
+  }
+
+  return false;
+}
+
+export function evaluateShellComponent(node: any): ShellComponentEvaluation {
+  const comp = node?.component || {};
+  const sourceLibraryKey = comp.sourceLibraryKey || node?.sourceLibraryKey;
+  const componentKey = comp.componentKey || node?.componentKey;
+  const nodeName = node?.name || 'Unnamed';
+  const nodeId = node?.id || 'unknown';
+
+  if (!isShellComponent(node)) {
+    return {
+      isShell: false,
+      reasons: ['Node contains visual assets or is not an external library shell component.'],
+      recommendation: 'NOT_A_SHELL',
+      suggestedAction: 'Proceed with normal local inspection or asset extraction.',
+    };
+  }
+
+  const reasons = [
+    `Node "${nodeName}" (${nodeId}) is an external library shell component: it has structure but zero binary vector or image assets in this bundle.`,
+  ];
+  if (sourceLibraryKey) {
+    reasons.push(`Origin library sourceLibraryKey: "${sourceLibraryKey}".`);
+  }
+  if (componentKey) {
+    reasons.push(`Cross-file componentKey: "${componentKey}".`);
+  }
+  reasons.push('Anti-pattern warning: Searching the current bundle by name will return unrelated local assets or fail.');
+
+  const suggestedAction = sourceLibraryKey
+    ? `Do NOT search current bundle by name. Query peer bundle for sourceLibraryKey "${sourceLibraryKey}" or componentKey "${componentKey || nodeName}" using search_nodes or inspect_node.`
+    : `Do NOT search current bundle by name. Query peer bundles (e.g. DesignSystem) using search_nodes with query "${nodeName}" and type "SYMBOL".`;
+
+  return {
+    isShell: true,
+    sourceLibraryKey,
+    componentKey,
+    reasons,
+    recommendation: 'RESOLVE_PEER_BUNDLE',
+    suggestedAction,
+    recommendedTool: resolveRecommendedTool('RESOLVE_PEER_BUNDLE', {
+      query: nodeName,
+      nodeId,
+      sourceLibraryKey,
+      componentKey,
+    }),
+  };
 }
 
 const LEAF_TYPES = new Set(['TEXT', 'VECTOR', 'RECTANGLE', 'ELLIPSE', 'LINE', 'STAR', 'POLYGON']);
@@ -126,11 +232,30 @@ export function evaluateNodeForFallback(node: any, fileKey?: string): Evaluation
   // 2. Children already populated
   const childCount = (node.children && node.children.length) || (node.resolvedChildIds && node.resolvedChildIds.length) || (node.childIds && node.childIds.length) || 0;
   if (childCount > 0) {
+    if (isShellComponent(node)) {
+      const shellEval = evaluateShellComponent(node);
+      return {
+        nodeId,
+        nodeName,
+        nodeType,
+        isLocalFileKey,
+        isShellComponent: true,
+        sourceLibraryKey: shellEval.sourceLibraryKey,
+        componentKey: shellEval.componentKey,
+        shouldFallback: false,
+        confidence: 'HIGH',
+        reasons: shellEval.reasons,
+        recommendation: 'RESOLVE_PEER_BUNDLE',
+        suggestedAction: shellEval.suggestedAction,
+        recommendedTool: shellEval.recommendedTool,
+      };
+    }
     return {
       nodeId,
       nodeName,
       nodeType,
       isLocalFileKey,
+      isShellComponent: false,
       shouldFallback: false,
       confidence: 'NONE',
       reasons: [`Node already has ${childCount} children populated.`],
@@ -338,8 +463,9 @@ export function resolveRecommendedTool(
           nodeId: context.nodeId || '',
         },
         expectedTokenCost: 'MEDIUM (300-1500)',
-        rationale: 'Surgically hydrates single component instance via official API. Must be pruned immediately.',
-        forbiddenAlternatives: ['get_figma_data without nodeId (dumps entire file AST, 100k+ tokens)'],
+        requiresUserConfirmation: true,
+        rationale: 'Surgically hydrates single component instance via official API. FREE ACCOUNT LIMIT: Must obtain explicit user confirmation before calling Figma API.',
+        forbiddenAlternatives: ['get_figma_data without nodeId (dumps entire file AST, 100k+ tokens)', 'Calling Figma API without user confirmation'],
       };
 
     case 'DOWNLOAD_IMAGE':
@@ -351,8 +477,22 @@ export function resolveRecommendedTool(
           nodeIds: [context.nodeId || ''],
         },
         expectedTokenCost: 'LOW (<300)',
-        rationale: 'Cloud rasterization of component preview image.',
-        forbiddenAlternatives: ['get_frame_bundle PNG base64 embed'],
+        requiresUserConfirmation: true,
+        rationale: 'Cloud rasterization of component preview image. FREE ACCOUNT LIMIT: Must obtain explicit user confirmation before calling Figma API.',
+        forbiddenAlternatives: ['get_frame_bundle PNG base64 embed', 'Calling Figma API without user confirmation'],
+      };
+
+    case 'RESOLVE_PEER_BUNDLE':
+      return {
+        server: 'figma-free',
+        tool: 'search_nodes',
+        params: {
+          query: context.componentKey || context.query || '',
+          type: 'SYMBOL',
+        },
+        expectedTokenCost: 'LOW (<300)',
+        rationale: 'Searches peer bundles (e.g. DesignSystem) across .figctx/ to locate the original component with full visual assets.',
+        forbiddenAlternatives: ['Repeated name search in current bundle', 'Ad-hoc vector reconstruction', 'Blind image guessing'],
       };
   }
 }

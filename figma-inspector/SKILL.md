@@ -46,27 +46,76 @@ A token-efficient, rate-limit-resistant workflow for extracting Figma designs. I
        /                 \
  (Success)          (Unavailable)
      /                     \
-[Use resolved tree]   [Check cloud key + API permission]
- (0 API Cost)              │
-                           ▼
-                   [Targeted Official API Call]
-                   (GET /v1/files/:key/nodes?ids=ID)
-                           │
-                           ▼
-                 [Full-Depth Pruning]
-                 (Strip matrix/noise, preserve CSS)
-                           │
-                           ▼
-                  [Save to Disk Cache]
-                           │
-                           ▼
-                   [Ready for Code Gen]
+[Shell Component?]   [Check cloud key + API permission]
+(expanded tree has         │
+0 vector/image assets)     ▼
+   /            \     [Targeted Official API Call]
+ (No)          (Yes)  (GET /v1/files/:key/nodes?ids=ID)
+  /               \        │
+[Ready for Code]  [Check component.sourceLibraryKey]
+                  [and componentKey via inspect_node]
+                        │
+                        ▼
+                  [Search Peer Bundles (.figctx/*/manifest.json)]
+                  (e.g. DesignSystem via search_nodes)
+                        │
+                  /           \
+               (Found)     (Missing)
+                 /               \
+        [Extract True Asset]   [Fail Loud: Prompt User to]
+        (get_vector_svg /      [Export External Library .fig]
+         compose_vector_svg)
+                        │
+                        ▼
+                  [Ready for Code Gen]
 ```
 
 ## Core Patterns
 
 ### 1. Offline-First, Cloud-Fallback
 Always explore designs offline first via `figma-free` (`search_nodes`, `inspect_node`). Those local calls do not consume Figma REST API quota; any later official MCP／REST fallback remains a separately observable network operation.
+
+### 1.1 Mandatory User Confirmation Gate for Official Figma API Calls (打官方 API 前必須徵詢使用者同意)
+> [!IMPORTANT]
+> **Free Account API Quota Protection**: Free Figma accounts have an extremely restrictive API rate limit. Calling the official Figma REST API or official Figma MCP (`figma: get_figma_data`, `figma: download_figma_images`) without consent can instantly exhaust the user's quota or trigger HTTP 429 rate limits.
+>
+> **Hard Rule**:
+> 1. **Never call official Figma API tools autonomously.**
+> 2. When local resolution and peer bundle searches are exhausted and official API hydration is genuinely required, **the Agent MUST pause and ask for explicit user confirmation first**.
+> 3. The confirmation request must clearly state:
+>    - The reason why local inspection/peer bundle failed.
+>    - The exact `nodeId` and cloud `fileKey` to be fetched.
+>    - The reminder that free account API quota is strictly limited.
+> 4. **Only proceed if the user explicitly approves the API call.**
+
+### 1.2 Fail Loud & Immediate User Alerting on Any Failure (遇到任何失敗一律特別提醒使用者)
+> [!WARNING]
+> **Zero Silent Degradation**:
+> 1. If **ANY** step in the inspection process fails (e.g. node not found, shell component has no matching peer bundle, vector extraction fails, component swap cannot be resolved, or an API error occurs):
+>    - **Immediately and explicitly alert the user.**
+>    - Highlight the exact failure reason, affected node ID, and component name in high-visibility formatting.
+>    - Provide actionable next steps (e.g., prompt user to export missing library `.fig`, verify node ID, or provide cloud URL).
+> 2. **Strictly Prohibited**:
+>    - NEVER silently skip missing layers or assets.
+>    - NEVER invent, mock-stitch, or guess vector paths or SF Symbols.
+>    - NEVER silently pick unrelated local images or default components as substitutes.
+>    - NEVER claim completion when visual assets are unresolved.
+
+### 1.3 Primary Bundle Short-Circuit Rule (主 Bundle 優先短路原則 — 嚴禁過度跨庫探索)
+> [!IMPORTANT]
+> **Primary-First Fast Path**:
+> When the user specifies both a **primary local bundle** and an **external Design System bundle**:
+> 1. **Always inspect and attempt output on the PRIMARY bundle first.**
+> 2. Check if the target node in the primary bundle already contains rendered geometry or child layers (`resolvedChildIds.length > 0` or own vector/asset refs).
+> 3. If the primary bundle already contains the needed vector or image assets:
+>    - **IMMEDIATELY proceed with the output/render.**
+>    - **DO NOT** proactively inspect, traverse, or query the external Design System bundle.
+> 4. The external Design System is strictly a **fallback candidate** to be consulted ONLY IF:
+>    - The primary bundle does NOT contain the node, OR
+>    - The node in the primary bundle is verified to be a hollow Shell Component (0 vectors and 0 image fills).
+> 5. Proactively exploring the external library when the primary bundle already has the required assets is an anti-pattern that wastes token budget and introduces confusion.
+
+
 
 ### 2. Heuristic Detection for Unhydrated Instances
 When an `INSTANCE` shows `childIds: []` locally, check:
@@ -79,6 +128,48 @@ When an `INSTANCE` shows `childIds: []` locally, check:
 7. **Local Component Search**: If the reference is unavailable, search the same `.fig` file for a named component container (`FRAME`／`CANVAS`) and inspect its `SYMBOL` children. Do not assume that a literal `SYMBOL` name equals the container name.
 
 An empty raw `childIds` result proves only that the local export did not attach child layers directly to the instance. Check normalized `resolvedChildIds` and raw `symbolData` before considering cloud fallback. Missing `mainComponentId`, `componentProperties`, or `overrides` does not by itself prove a cross-file Team Library origin; record that as an unverified hypothesis unless the source metadata supports it.
+
+### 2.1 Instance Override & Swap Verification Gate (Override-First)
+When inspecting an `INSTANCE` node:
+1. **Never treat the base component as ground truth**: The base `SYMBOL` defines layout and default fallback values. When an instance overrides text or swaps child components, the instance's overrides supersede the base component.
+2. **Resolve Instance Swaps**: Check `componentPropAssignments` and `symbolOverrides`. If child subcomponents (such as icon buttons) are swapped, trace and resolve the target swapped component rather than retaining the base template's default child.
+3. **Fail Loud on Unresolved Swaps**: If the local tool or bundle cannot resolve the swapped component (e.g. cross-file Team Library reference), do NOT invent, mock-stitch, or guess icon paths or SF Symbols. Report the missing reference explicitly.
+4. **Semantic Alignment Sanity Check**: Cross-check button labels against associated icon semantics (e.g., a "排序" button must not silently adopt a "History/Clock" icon without raising a semantic warning).
+
+### 2.2 Cross-Bundle Team Library Resolution (Peer-Bundle Discovery)
+When an instance references an external Team Library component:
+1. **Trace Library Pointers**: Raw nodes identify external symbols via:
+   - `sourceLibraryKey`: The library's unique origin hash (e.g., `lk-d20be...`).
+   - `publishID`: The canonical component ID within that library (e.g. `{ sessionID: 101, localID: 15798 }` -> `101:15798`).
+2. **Automatic Peer-Bundle Resolution**: The `figma-free-mcp` server automatically indexes peer bundles in sibling directories (`.figctx/*/manifest.json`). When querying a node ID or Figma URL belonging to an external library, the MCP seamlessly routes queries to the corresponding peer bundle.
+3. **Handling Missing Team Libraries**:
+   - If the external `sourceLibraryKey` does not match any local bundle under `.figctx/`, **Fail Loud**: report to the user that the design references an external Team Library (`sourceLibraryKey`) that has not yet been exported locally.
+   - Instruct the user to export the library `.fig` file into `.figctx/<library-name>` or await cloud API rate-limit recovery. Never guess or fabricate icon shapes.
+4. **Stroke-Based Outline Icons**: Many design system icons use `stroke` instead of `fill`. Ensure vector extraction tools preserve stroke weight, stroke alignment, and color (`stroke="#HEX"` with `fill="none"`).
+
+### 2.3 Shell Component Detection & Cross-Bundle Resolution (空殼元件偵測與跨庫解析)
+In local `.fig` exports, **up to 74% of SYMBOL nodes and expanded INSTANCE nodes are "shell components"**:
+Figma caches external Team Library component tree structures (child hierarchy, layout frames, text nodes) in the local `.fig` file, but **does NOT embed binary vector network blobs (`vectorRef`) or image fills (`assetRefs`)**.
+
+#### Detection Criteria (空殼判定條件)
+A node is an **External Library Shell Component** when:
+1. `node.type === 'INSTANCE'` or `node.type === 'SYMBOL'`
+2. `childCount > 0` (or `resolvedChildIds` populated), BUT **no node in the entire subtree has `vectorRef` or image `assetRefs`** (`assets.imageFillCount === 0 && assets.hasVector === false`).
+3. `component.sourceLibraryKey` or `component.componentKey` is present (exposed in `inspect_node`), identifying its external origin.
+
+#### Resolution Rules (解析原則)
+1. **Never search the current bundle by name**: When an icon/button instance is a shell component, searching for its name in the current bundle will match unrelated local assets or time out with wrong images. **Stop immediately.**
+2. **Read Library Metadata from `inspect_node`**:
+   - `component.sourceLibraryKey`: origin library hash (e.g., `lk-d20be...`).
+   - `component.componentKey`: cross-file unique component identifier.
+3. **Query Peer Bundles**:
+   - The `figma-free-mcp` automatically discovers peer bundles located in sibling directories under `.figctx/`.
+   - Call `search_nodes(query: componentKey, type: 'SYMBOL')` or search by name across peer bundles to locate the original master `SYMBOL` that contains full vector networks and image assets.
+   - Extract the asset using `get_vector_svg(reference: peerNodeId)` or `compose_vector_svg`.
+4. **Fail Loud When Peer Bundle is Missing**:
+   - If no peer bundle under `.figctx/` matches `sourceLibraryKey` or contains the component, **report the gap to the user immediately**.
+   - Instruct the user to export the missing Team Library (e.g. `面試筆記 Design System.fig`) into `.figctx/<bundle-name>/`.
+   - **Strictly forbid guessing, ad-hoc SVG fabrication, or using visually incorrect local assets.**
 
 ### 3. Micro-Scope Full-Depth + Property Pruning
 To preserve measured visual properties without token bloat:
@@ -98,6 +189,24 @@ For any icon or SVG requested from a Figma URL:
 3. Inspect `fills`, `strokes`, `strokeWeight`, `strokeCap`, and `strokeJoin`. Preserve outline semantics as stroke geometry and filled semantics as fill geometry.
 4. Treat generated SVG as an extracted representation that requires checks for connected region loops, segment orientation, and XML validity. Passing an SVG byte comparison alone does not prove that it is the correct product icon.
 5. Record parser version and source freshness. If the local bundle is stale or the requested node is absent, report that evidence gap before using a cloud fallback.
+
+### 3.2 Direct CLI Output Fallback (CLI 輸出備援原則)
+When the user explicitly asks to **export an SVG or image file to a destination** (e.g. `Downloads/` or project assets):
+1. **Try MCP tool first**: Call `figma-free: get_vector_svg` with the target `reference`.
+2. **Immediate CLI Fallback on MCP failure**: If `get_vector_svg` fails (e.g. background daemon bundle root mismatch, stale daemon process, or `No renderable vector group` error):
+   - **DO NOT** wander off to inspect raw AST JSON or search arbitrary peer libraries.
+   - **IMMEDIATELY execute the figma-free CLI render command**:
+     ```bash
+     node packages/cli/dist/main.js render <bundlePath> --node <nodeId> > <outputPath>
+     ```
+   - The CLI directly accesses the target bundle on disk and renders without depending on daemon socket state.
+
+### 3.3 Variant Stroke Weight Precision (變體筆觸寬度精確性)
+Design System icons frequently share a single base vector network blob across multiple size variants (e.g., 20px with 1.2px stroke, 30px with 1.8px stroke):
+1. **Shared Blob Default**: The Kiwi vector blob records the stroke weight of whichever variant defined it first (e.g. 1.2px).
+2. **Instance Override**: The rendering engine (`pathElements` in `frame.ts`) must explicitly override the SVG fragment's `stroke-width` with the instance node's own `strokeWeight` (e.g. 1.8px).
+3. **Verification**: Always confirm that exported SVGs reflect the instance's declared `strokeWeight` rather than falling back to the base fragment's default.
+
 
 ### 4. API Resilience & Circuit-Breaker Rules
 When falling back to the official Figma REST API, calls must go through a resilient HTTP client (`scripts/figma-fetcher.ts`):
@@ -139,7 +248,7 @@ The skill includes executable TypeScript utilities:
 
 - **`scripts/prune-figma-node.ts`**: Recursively strips non-render properties, converts colors to `#RRGGBB`, formats Auto Layout, maps `componentProperties` & `layoutGrow`, extracts icon hints, and reports compression stats.
 - **`scripts/inspection-decision.ts`**: Validates inspection nodes and Figma nodes responses, evaluates whether a node with missing children should trigger fallback, detects `lk-` local hashes, resolves recommended MCP tools via `resolveRecommendedTool()`, and exposes `resolveFallbackStage()` for the local-search to cloud-hydrate transition.
-- **Local resolver (`POLAX7/figma-free-mcp/packages/core`)**: Preserves `symbolData` references and expands local instances into `resolvedChildIds`; use this before any cloud fallback. The maintained fork is available at https://github.com/POLAX7/figma-free-mcp.
+- **Local resolver (`figma-free-mcp/packages/core`)**: Preserves `symbolData` references and expands local instances into `resolvedChildIds`; use this before any cloud fallback.
 - **`scripts/cache-manager.ts`**: Local disk persistence manager with exact `.figctx` bundle identity, source/schema validation, atomic writes, and `getOrSet()` in-process concurrent miss deduplication.
 - **`scripts/figma-fetcher.ts`**: Resilient HTTP client with bounded total attempts, abortable backoff, 60s circuit-breaker on long cooldowns, rate-limit metadata, and 4xx fast-fail.
 - **`scripts/test-runner.ts`**: Verifies the Alert-shaped synthetic fixture, full-depth retention, supported styling properties, unsupported-property markers, compression ratios, props/flex extraction, cache auto-invalidation, and tool selection matrix.
@@ -213,5 +322,17 @@ if (evaluation.shouldFallback) {
 - **Red Flag: Retrying 4xx client errors.** 400, 401, 403, and 404 are permanent client errors. Retrying them wastes time and masks setup errors.
 - **Red Flag: Blindly calling `get_frame_bundle`.** `get_frame_bundle` dumps all assets, vectors, and PNG references (15k-50k tokens). Always prefer `list_frame_summaries`, `search_nodes`, or `inspect_node(depth: 2)`.
 - **Red Flag: Calling `get_figma_data` without `nodeId`.** Fetching the entire Figma cloud file returns tens of MBs (100k+ tokens) and triggers HTTP 504. Always specify the target `nodeId`.
-- **Red Flag: Searching by icon name before routing by URL identity.** Resolve `fileKey` + `node-id` and the local bundle manifest first; names and nearby instances can point to a different variant.
-- **Red Flag: Trusting a generated vector SVG without style and geometry checks.** Confirm fill/stroke semantics and that every region loop forms a connected path before using it in an asset catalog.
+- **Red Flag: Using base component default icons on an overridden instance without verifying `componentPropAssignments`.** In Figma, an `INSTANCE` frequently swaps subcomponents (e.g. replacing default icons). Never assume the base `SYMBOL`'s default child nodes represent the final screen. When component prop assignments exist, they must be resolved or explicitly reported as unresolved.
+- **Red Flag: Ad-hoc manual vector parsing or mock-stitching when extraction tools fail.** Never parse raw binary geometry with custom scratch scripts, guess SF Symbols, or manually stitch disparate coordinate paths together. Adhere strictly to Fail Loud: if the MCP tool cannot extract the SVG, state the gap clearly and prompt for official API fallback.
+- **Red Flag: Skipping semantic alignment sanity checks.** Always verify that button labels match their associated icon semantics (e.g., a "排序" button should not be silently paired with a clock/history icon). If a conflict or mismatch exists, flag it immediately before presenting conclusions.
+- **Red Flag: Searching current bundle by name when encountering a shell component.** External library instances frequently have child tree structure but 0 binary vector/image assets. Searching by name in the same bundle returns completely wrong local assets. Always inspect `component.sourceLibraryKey` / `component.componentKey` and route to the corresponding peer bundle.
+- **Red Flag: Calling official Figma API without explicit user confirmation.** Free account API quota is severely limited. The Agent must never autonomously invoke `figma: get_figma_data` or `figma: download_figma_images` without first obtaining explicit approval from the user.
+- **Red Flag: Silently ignoring or concealing inspection failures.** If an asset cannot be extracted, a component swap cannot be resolved, or a tool throws an error, the Agent must never silently guess, synthesize placeholders, or proceed without explicitly alerting the user.
+
+## User Prompt Guidelines (提問參數指引)
+
+When instructing an Agent using this skill, providing these three core parameters achieves maximum speed and accuracy:
+
+1. **Figma Web URL with `node-id`**: e.g. `https://www.figma.com/design/:fileKey/...?...node-id=1437-42481` (avoids fuzzy search, jumps straight to exact node `1437:42481`, supplies real cloud `fileKey`).
+2. **Local primary `.figctx` bundle path**: e.g. `.figctx/mail-template-expanded-v6/` (enables offline-first resolution with zero API quota consumption).
+3. **External Team Library path**: e.g. `.figctx/design-system-full/` (enables cross-bundle peer resolution via `componentKey` when encountering shell components).

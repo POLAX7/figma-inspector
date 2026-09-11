@@ -5,7 +5,16 @@
  */
 
 import { pruneFigmaNode, colorToHex, calculateCompressionStats } from './prune-figma-node.ts';
-import { evaluateNodeForFallback, resolveRecommendedTool, resolveFallbackStage, validateInspectionNode, validateFigmaNodesResponse } from './inspection-decision.ts';
+import {
+  evaluateNodeForFallback,
+  resolveRecommendedTool,
+  resolveFallbackStage,
+  validateInspectionNode,
+  validateFigmaNodesResponse,
+  hasVisualAssets,
+  isShellComponent,
+  evaluateShellComponent
+} from './inspection-decision.ts';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -398,7 +407,14 @@ console.log(`Reasons identified for lk- key: \n  ${localKeyDecision.reasons.join
 
 // 3e. Local .figctx evidence: an empty instance and its component definitions
 // must remain separate facts so an omitted child tree is not reported as no text.
-const localBundlePath = path.resolve(process.cwd(), '.figctx/mail-template/document.agent.json');
+const possibleBundlePaths = [
+  path.resolve(process.cwd(), '.figctx/mail-template-expanded-v7/document.agent.json'),
+  path.resolve(process.cwd(), '.figctx/mail-template/document.agent.json'),
+  path.resolve(process.cwd(), '../../.figctx/mail-template-expanded-v7/document.agent.json'),
+  path.resolve(process.cwd(), '../../.figctx/mail-template/document.agent.json'),
+  '/Users/DavidTai/Documents/GitHub/.figctx/mail-template-expanded-v7/document.agent.json'
+];
+const localBundlePath = possibleBundlePaths.find((p) => fs.existsSync(p)) || possibleBundlePaths[0];
 assert(fs.existsSync(localBundlePath), 'Local .figctx fixture is available for runtime verification');
 const localBundle = JSON.parse(fs.readFileSync(localBundlePath, 'utf-8'));
 const localInstance = localBundle.nodesById['1431:38302'];
@@ -409,6 +425,66 @@ const localAlertText = Object.values(localBundle.nodesById).some((node: any) =>
   node.type === 'TEXT' && ['成功訊息', '提示訊息', '警告訊息', '錯誤訊息'].includes(node.name)
 );
 assert(localAlertText, 'Local Alert component definitions contain text layers');
+
+// 3f. Shell Component Detection & Cross-Bundle Evaluation tests
+console.log('\nTest 3f: Shell Component Detection & Cross-Bundle Evaluation');
+
+const shellIconInstance = {
+  id: '101:15798',
+  name: 'StarIcon',
+  type: 'INSTANCE',
+  childIds: ['101:15799'],
+  resolvedChildIds: ['101:15799'],
+  component: {
+    type: 'INSTANCE',
+    mainComponentId: '200:1',
+    expanded: true,
+    sourceLibraryKey: 'lk-d20be...design-system',
+    componentKey: 'icon-star-key-9988'
+  },
+  assets: { imageFillCount: 0, hasVector: false },
+  children: [
+    {
+      id: '101:15799',
+      name: 'Vector',
+      type: 'VECTOR',
+      assets: { imageFillCount: 0, hasVector: false },
+      childCount: 0,
+      children: []
+    }
+  ]
+};
+
+assert(hasVisualAssets(shellIconInstance) === false, 'Shell component correctly reports 0 visual assets');
+assert(isShellComponent(shellIconInstance) === true, 'Shell component correctly detected by isShellComponent');
+
+const shellEval = evaluateShellComponent(shellIconInstance);
+assert(shellEval.isShell === true, 'evaluateShellComponent marks isShell as true');
+assert(shellEval.sourceLibraryKey === 'lk-d20be...design-system', 'Preserves sourceLibraryKey in evaluation');
+assert(shellEval.componentKey === 'icon-star-key-9988', 'Preserves componentKey in evaluation');
+assert(shellEval.recommendation === 'RESOLVE_PEER_BUNDLE', 'Recommends RESOLVE_PEER_BUNDLE');
+assert(shellEval.reasons.some((r) => r.includes('Anti-pattern warning')), 'Warns against searching current bundle by name');
+
+const fallbackDecision = evaluateNodeForFallback(shellIconInstance);
+assert(fallbackDecision.isShellComponent === true, 'evaluateNodeForFallback flags isShellComponent');
+assert(fallbackDecision.recommendation === 'RESOLVE_PEER_BUNDLE', 'evaluateNodeForFallback recommends RESOLVE_PEER_BUNDLE');
+assert(fallbackDecision.recommendedTool?.tool === 'search_nodes', 'Recommends search_nodes for peer bundle resolution');
+assert(resolveFallbackStage(fallbackDecision) === 'LOCAL_SEARCH', 'resolveFallbackStage routes to LOCAL_SEARCH for peer bundle');
+
+// Normal node with visual assets should NOT be flagged as shell
+const normalVectorNode = {
+  id: '101:20000',
+  name: 'FilledIcon',
+  type: 'INSTANCE',
+  childIds: ['101:20001'],
+  vectorRef: { blobId: 1 },
+  assets: { imageFillCount: 0, hasVector: true },
+  children: []
+};
+assert(hasVisualAssets(normalVectorNode) === true, 'Node with vectorRef has visual assets');
+assert(isShellComponent(normalVectorNode) === false, 'Node with vectorRef is not a shell component');
+const normalEval = evaluateShellComponent(normalVectorNode);
+assert(normalEval.isShell === false, 'Normal node evaluateShellComponent is false');
 
 // 3d. Granular Tool Selection Matrix tests
 const screenTool = resolveRecommendedTool('LIST_SCREENS');
@@ -422,11 +498,21 @@ const iconTool = resolveRecommendedTool('EXTRACT_ICON_SVG', { nodeId: '10:2' });
 assert(iconTool.tool === 'get_vector_svg', 'EXTRACT_ICON_SVG maps to get_vector_svg');
 assert(iconTool.params.reference === '10:2', 'EXTRACT_ICON_SVG passes reference');
 
+const peerBundleTool = resolveRecommendedTool('RESOLVE_PEER_BUNDLE', { query: 'StarIcon', componentKey: 'icon-star-key-9988' });
+assert(peerBundleTool.tool === 'search_nodes', 'RESOLVE_PEER_BUNDLE maps to search_nodes');
+assert(peerBundleTool.params.query === 'icon-star-key-9988', 'RESOLVE_PEER_BUNDLE prioritizes componentKey');
+assert(peerBundleTool.forbiddenAlternatives.some(f => f.includes('Repeated name search')), 'RESOLVE_PEER_BUNDLE forbids repeated local search');
+
 const cloudHydrateTool = resolveRecommendedTool('HYDRATE_INSTANCE', { fileKey: 'EXfHitAQKwAIBHdY5fqa9A', nodeId: '1518:55106' });
 assert(cloudHydrateTool.server === 'figma', 'HYDRATE_INSTANCE maps to official figma MCP');
 assert(cloudHydrateTool.tool === 'get_figma_data', 'HYDRATE_INSTANCE maps to get_figma_data');
 assert(cloudHydrateTool.params.nodeId === '1518:55106', 'HYDRATE_INSTANCE requires nodeId');
 assert(cloudHydrateTool.forbiddenAlternatives.some(f => f.includes('without nodeId')), 'HYDRATE_INSTANCE forbids calling get_figma_data without nodeId');
+assert(cloudHydrateTool.requiresUserConfirmation === true, 'HYDRATE_INSTANCE requires explicit user confirmation before calling official API');
+
+const downloadImageTool = resolveRecommendedTool('DOWNLOAD_IMAGE', { fileKey: 'EXfHitAQKwAIBHdY5fqa9A', nodeId: '1518:55106' });
+assert(downloadImageTool.requiresUserConfirmation === true, 'DOWNLOAD_IMAGE requires explicit user confirmation before calling official API');
+
 
 
 // 4. Test Cache Manager

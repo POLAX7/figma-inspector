@@ -310,3 +310,56 @@ Figma REST API 採用 **漏桶演算法（Leaky Bucket Algorithm）**，依三�
    * **巨觀定位用淺層（Shallow）**：優先使用 `figma-free` 查閱全貌。
    * **微觀實作用本地展開優先**：發現空 `INSTANCE` 時，先解析 `symbolData` 與同檔 component definition；只有 local resolver 無法解析時，才檢查快取並考慮 targeted API。
    * **進入 Prompt 前剪枝（Prune）**：一律調用 `pruneFigmaNode` 進行瘦身並寫入快取，保留已支援的 fidelity 欄位；視覺 parity 仍需另行執行 manual/visual QA。
+
+---
+
+## 八、使用者提問最佳實踐（Prompt 最佳參數指引）
+
+為了讓 `figma-inspector` 能以最快速度、0 瞎猜、精準鎖定目標 UI 畫面或圖示資產，建議在提問 Prompt 中提供以下三項核心參數：
+
+### 1. 核心「黃金三要素」（速度最快、準確度 99%）
+
+| 參數項目 | 格式範例 | 為什麼關鍵？ |
+| :--- | :--- | :--- |
+| **1. Figma 網頁 URL**（含 `node-id`） | `https://www.figma.com/design/:fileKey/...?...node-id=1437-42481` | 跳過全檔模糊文字搜尋，直接精準下鑽至目標節點（`1437:42481`）；且具備真實 `fileKey` 可供必要時雲端 fallback。 |
+| **2. 本地主 bundle 路徑** | `/Users/DavidTai/Documents/GitHub/.figctx/mail-template-expanded-v6` | 優先調用 `figma-free` 進行本地解析（0 API 呼叫、0 等待、無 429 限流風險）。 |
+| **3. 外部設計系統（Team Library）路徑** | `/Users/DavidTai/Documents/GitHub/.figctx/design-system-full` | 當目標元件為外部庫「空殼」（無二進位資產）時，Agent 可直接透過 `componentKey` 跨庫提取原始向量/圖片，避免在主檔盲目搜尋導致超時或取錯圖。 |
+
+### 2. 輔助描述（避免翻車）
+
+* **指定目標層級與類型**：
+  * **向量圖示（SVG Icon）**：標註圖示在畫面上的具體位置或語意標籤（例如：「搜尋欄右邊的清除叉叉 icon」）。
+  * **點陣圖片（PNG/JPG）**：標註圖片容器名稱或用途（例如：「公司 Logo」）。
+  * **排版還原（Layout）**：告知預計開發的前端框架（例如：SwiftUI 或 React）。
+* **指定變體與狀態（States / Overrides）**：
+  * 若有特定互動狀態（如 `State=Disabled` 或 `Size=24px`），或存在文字覆寫（Text Override），明確指出以畫面當前狀態為準，避免 Agent 誤採 base component 預設值。
+
+### 3. Prompt 推薦範本
+
+```text
+請使用 figma-inspector 幫我提取這個 UI 元件：
+
+1. Figma 節點：https://www.figma.com/design/D1YdPEP1ny5AiqROSWGpSj/即時通信件合併?node-id=1437-42481
+2. 本地主 bundle：/Users/DavidTai/Documents/GitHub/.figctx/mail-template-expanded-v6
+3. 外部 Design System：/Users/DavidTai/Documents/GitHub/.figctx/design-system-full
+4. 任務目標：提取該畫面頂部「搜尋欄右邊的漏斗篩選 Icon」的 SVG 向量資料，並確認其寬高與顏色。
+```
+
+---
+
+## 九、執行安全規範：防限流審批與強制失敗警示
+
+在執行 `figma-inspector` 的過程中，AI Agent 必須嚴格遵守以下兩大安全鐵律：
+
+### 1. 遇到任何失敗一律特別提醒使用者（Fail Loud 原則）
+* **禁止靜默降級**：若在解析過程中遭遇任何異常（例如：本地找不到節點、外部庫空殼無對應 peer bundle、圖示向量合成為空、元件置換無法解析），Agent **絕對不可靜默略過、胡亂猜測 SF Symbols、自行手刻假 SVG 或隨便拿錯誤的本地圖示替換**。
+* **高可見度警示**：必須以粗體或警示區塊（`> [!WARNING]`）明確提醒使用者，詳列出錯的節點 ID、元件名稱與具體缺失原因，並提供明確的修復指引（例如提示匯出缺失的 Team Library `.fig`）。
+
+### 2. 呼叫官方 Figma API 前必須取得使用者明確同意（保護免費帳號額度）
+* **免費帳號限額極低**：官方 Figma REST API 與 Figma MCP（`get_figma_data`, `download_figma_images`）對免費方案有極為嚴苛的頻率與次數限制，極易觸發 HTTP 429 限流。
+* **強制使用者授權機制**：Agent 在決定發送任何官方 API 請求之前，**必須暫停並主動向使用者說明與徵詢許可**。
+* **詢問內容須包含**：
+  1. 為什麼本地離線解析與 peer bundle 無法滿足需求。
+  2. 預計請求的具體 `nodeId` 與雲端 `fileKey`。
+  3. 提醒此操作將消耗官方 API 額度。
+  4. 只有在使用者明確同意後，才可執行 API 調用。
